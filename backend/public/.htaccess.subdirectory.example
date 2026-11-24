@@ -1,0 +1,28 @@
+# Subdirectory deployment .htaccess template for https://wildfirexstream.com/retrotok/
+# Copy to: public_html/retrotok/.htaccess
+# Do NOT modify the parent WordPress public_html/.htaccess for RetroTok routing.
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /retrotok/
+
+    # Preserve Authorization header on Apache / Hostinger PHP-FPM / FastCGI
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Block hidden dotfiles (except well-known ACME challenges)
+    RewriteCond %{REQUEST_URI} !(^|/)\.well-known/
+    RewriteRule (^|/)\. - [F,L]
+
+    # Route all non-file/non-directory requests under /retrotok/ through index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+</IfModule>

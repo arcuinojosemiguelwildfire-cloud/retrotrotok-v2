@@ -1,0 +1,927 @@
+# RetroTok Cloud Integration
+## Phase 0 — Architecture, Requirements & Implementation-Ready Technical Specification
+
+**Project:** RetroTok  
+**Module:** Cloud Video Storage, Upload Synchronization & QR Video Sharing  
+**Phase:** Cloud Phase 0  
+**Status:** Architecture finalized; implementation pending hosting and credential verification.
+
+---
+
+# 1. Project Overview
+
+RetroTok will evolve from a fully local kiosk application into a hybrid local-and-cloud video platform.
+
+The Android kiosk will continue to handle:
+- Guest sessions
+- Camera recording
+- Video effects
+- Soundtrack selection
+- Video composition and rendering
+- Local video management
+- Event management
+
+Cloud infrastructure will handle:
+- Video storage
+- Video upload synchronization
+- Cloud-backed video feed
+- QR code generation and access
+- Mobile video viewing and downloading
+- Automatic video expiration
+- Cloud administration
+
+The system must remain capable of recording and processing videos without an internet connection.
+
+Internet connectivity is required only for cloud synchronization, remote playback, and QR-based video access.
+
+**Core principle: Local-first recording, cloud-backed sharing.**
+
+# 2. Finalized Product Requirements
+
+| Requirement | Final Decision |
+|---|---|
+| Expected videos per event | 200 |
+| Technical capacity target | 300 videos |
+| Recording duration | Existing 15/30/60-second options |
+| Default recording duration | 30 seconds |
+| Preferred resolution | 720p, capability-based fallback |
+| Video format | MP4 / H.264 where supported |
+| Home feed | Immediate display |
+| Home feed content | Newly recorded videos only |
+| Video storage | Cloudflare R2 |
+| Database | Existing Hostinger MySQL |
+| Backend | Hostinger-hosted API |
+| Video retention | 30 days after successful upload |
+| Guest access | QR code |
+| QR security | Unique random access token |
+| Guest account | Not required |
+| Guest permissions | Watch and download |
+| Local recording | Works offline |
+| Upload | Automatic with retry |
+| Maximum concurrent uploads | One |
+| Event ending | Admin manually ends event |
+| Storage failure | Stop new recording and alert admin |
+| Cloud video deletion | Automatic after retention period |
+| Admin deletion | Supported |
+| Internet egress | R2 standard storage, no egress fee |
+
+No preloaded TikTok videos or third-party Shorts collection will be included. Home displays only videos recorded through RetroTok.
+
+# 3. System Architecture
+
+## 3.1 High-Level Architecture
+
+RetroTok will use the following architecture:
+
+ANDROID KIOSK
+- Existing Kotlin application
+- Jetpack Compose
+- MVVM / UDF
+- Room Database
+- DataStore
+- Camera and recording pipeline
+- Media3 playback
+- Local file storage
+- Persistent cloud upload queue
+
+HOSTINGER BACKEND
+- REST API
+- PHP 8.x as the compatibility-first implementation
+- MySQL database
+- Event and video metadata
+- Device authentication
+- QR token validation
+- Upload session management
+- Retention and deletion scheduler
+
+CLOUDFLARE R2
+- Private object storage bucket
+- Final MP4 videos
+- Video thumbnails
+- Temporary upload objects if required
+
+PUBLIC VIDEO VIEWING WEBSITE
+- Mobile-responsive video page
+- Token-based access
+- HTML5 video player
+- Download functionality
+- Expiration handling
+
+The Android application must never contain Cloudflare account credentials or R2 secret access keys.
+
+## 3.2 Storage Responsibility
+
+| Component | Responsibility |
+|---|---|
+| Android private storage | Temporary and pending videos |
+| Room | Local video records and upload queue |
+| Hostinger MySQL | Events, cloud video metadata, tokens and upload records |
+| Cloudflare R2 | Actual MP4 and thumbnail files |
+| Hostinger web hosting | API and public video-viewing website |
+
+Do not store MP4 binary data inside MySQL.
+
+Do not use Hostinger website disk storage as the primary video repository.
+
+# 4. Video Recording and Upload Workflow
+
+## 4.1 Recording Workflow
+
+The existing recording pipeline must remain intact.
+
+1. Guest selects an approved soundtrack.
+2. Guest selects an effect.
+3. Guest records using the existing camera pipeline.
+4. Video composition and soundtrack processing execute locally.
+5. Final MP4 is generated.
+6. Final output is validated.
+7. A local Room record is created.
+8. The video appears immediately in Home.
+9. The cloud upload process starts automatically when connectivity is available.
+
+Do not rewrite or replace the existing CameraX/Camera2/UVC architecture, OpenGL ES renderer, MediaCodec pipeline, or MediaMuxer implementation.
+
+## 4.2 Immediate Home Display
+
+Home must display the newly recorded video immediately, even when the cloud upload is not yet finished.
+
+Each video must have a synchronization status:
+
+- LOCAL_ONLY
+- PENDING_UPLOAD
+- UPLOADING
+- AVAILABLE
+- UPLOAD_FAILED
+- EXPIRED
+
+Suggested visual indicators:
+
+- PENDING_UPLOAD: Upload pending
+- UPLOADING: Uploading with progress
+- AVAILABLE: Cloud available
+- UPLOAD_FAILED: Upload failed
+
+A pending video must remain playable using its local MP4 file.
+
+After successful cloud verification, the video becomes remotely available.
+
+The Home feed must not create duplicate entries when the local record becomes associated with its cloud record.
+
+## 4.3 Upload Workflow
+
+Use a direct-to-R2 upload architecture.
+
+1. Android sends an upload initialization request to the backend.
+2. Backend authenticates the kiosk device.
+3. Backend validates the event and video metadata.
+4. Backend creates a pending video record.
+5. Backend generates a short-lived R2 presigned PUT URL.
+6. Android uploads the completed MP4 directly to R2.
+7. Android notifies the backend that the upload has completed.
+8. Backend checks the R2 object using HeadObject.
+9. Backend verifies the expected file size and content type.
+10. Backend marks the video AVAILABLE.
+11. Backend generates a unique QR access token.
+12. Backend returns the public viewing URL.
+13. Android updates Room and displays the QR code.
+
+The R2 bucket must remain private.
+
+Presigned upload URLs should have a short lifetime, preferably 10–15 minutes, and should authorize only the intended object and operation.
+
+If an upload URL expires, Android must request a new one rather than restarting the recording.
+
+For the expected file sizes, begin with single-object PUT uploads. Multipart upload can be introduced later if real-world file sizes or network conditions require it.
+
+# 5. Cloud Video Capacity and Encoding
+
+The technical target is 300 videos per event.
+
+Estimated storage:
+
+| Video configuration | Estimated storage for 300 videos |
+|---|---:|
+| 30 seconds at 3 Mbps | 3.375 GB |
+| 30 seconds at 5 Mbps | 5.625 GB |
+| 60 seconds at 3 Mbps | 6.75 GB |
+| 60 seconds at 5 Mbps | 11.25 GB |
+
+These are approximate video-only estimates.
+
+Use capability-based encoder settings. Target a reasonable bitrate around 3 Mbps for 720p where quality permits, and test the output on the actual Android 6.0.1 device.
+
+Do not force an unsupported resolution or bitrate.
+
+The upload API must enforce a configurable maximum file size. The initial policy should accommodate the actual output of the existing 60-second recording pipeline.
+
+Admin should be able to monitor:
+- Total videos
+- Total uploaded bytes
+- Available storage allowance
+- Pending uploads
+- Failed uploads
+- Expiring videos
+
+The initial R2 Standard storage allowance includes 10 GB-month, subject to Cloudflare's account pricing and shared usage.
+
+# 6. Database Architecture
+
+## 6.1 Hostinger MySQL
+
+Create the following cloud tables.
+
+### events
+
+| Field | Type | Description |
+|---|---|---|
+| id | BIGINT | Primary key |
+| event_name | VARCHAR | Event name |
+| status | VARCHAR | ACTIVE, PAUSED, ENDED |
+| started_at | DATETIME | Start timestamp |
+| ended_at | DATETIME | End timestamp |
+| created_at | DATETIME | Creation timestamp |
+
+Reuse existing event identifiers and synchronize with the existing local event lifecycle. Do not create a second independent event-management system.
+
+### videos
+
+| Field | Type | Description |
+|---|---|---|
+| id | BIGINT | Primary key |
+| event_id | BIGINT | Associated event |
+| kiosk_video_id | VARCHAR | Original local video identifier |
+| access_token_hash | VARCHAR | Hashed QR access token |
+| storage_key | VARCHAR | R2 object key |
+| thumbnail_key | VARCHAR | R2 thumbnail key |
+| file_size | BIGINT | Actual MP4 size |
+| duration_seconds | INT | Video duration |
+| mime_type | VARCHAR | Video MIME type |
+| checksum | VARCHAR | Optional client checksum |
+| status | VARCHAR | Cloud video status |
+| created_at | DATETIME | Record creation |
+| uploaded_at | DATETIME | Successful upload |
+| expires_at | DATETIME | Retention expiration |
+| deleted_at | DATETIME | Deletion timestamp |
+
+Add indexes for:
+- event_id
+- status
+- uploaded_at
+- expires_at
+- kiosk_video_id
+
+Ensure kiosk_video_id is unique within the appropriate device/event scope.
+
+### video_uploads
+
+Stores upload attempts and recovery information.
+
+Fields:
+- id
+- video_id
+- upload_attempt
+- upload_status
+- expected_size
+- uploaded_size
+- last_error
+- started_at
+- completed_at
+- updated_at
+
+### video_access_logs
+
+Optional access tracking.
+
+Fields:
+- id
+- video_id
+- accessed_at
+- access_type
+
+Do not collect unnecessary guest personal information.
+
+## 6.2 Android Room Migration
+
+The existing RetroTok Room database is at schema version 3 according to the current implementation report.
+
+Introduce Room migration v3 → v4.
+
+Do not use destructive migration.
+
+Recommended changes:
+
+1. Add cloud synchronization fields to the existing VideoEntity.
+2. Add a persistent CloudUploadEntity.
+3. Add the necessary DAO methods.
+4. Add indexes and foreign keys.
+5. Preserve all existing local videos and event records.
+6. Implement migration tests from v1, v2 and v3.
+
+Suggested CloudUploadEntity:
+
+- id
+- localVideoId
+- cloudVideoId
+- uploadStatus
+- uploadAttemptCount
+- lastError
+- expectedFileSize
+- uploadedBytes
+- createdAt
+- updatedAt
+
+The upload queue must survive application restarts.
+
+# 7. REST API Specification
+
+Use versioned endpoints under:
+
+`https://your-domain.com/api/v1/`
+
+## 7.1 Device Authentication
+
+POST `/devices/pair`
+
+Purpose:
+- Pair the kiosk with the backend.
+- Exchange a one-time administrator-issued pairing code for a device credential.
+
+POST `/devices/heartbeat`
+
+Purpose:
+- Verify device registration.
+- Report application and connection status.
+
+The kiosk must have a revocable device token.
+
+Store device credentials securely in app-private storage, preferably protected using Android Keystore where supported.
+
+Never embed a shared administrator password or R2 credential in the application.
+
+## 7.2 Upload Endpoints
+
+POST `/events/{eventId}/videos/initiate`
+
+Request:
+- kiosk_video_id
+- duration_seconds
+- file_size
+- mime_type
+- width
+- height
+- checksum, if supported
+
+Response:
+- cloud_video_id
+- upload_url
+- upload_headers
+- upload_expires_at
+- expected_file_size
+
+POST `/videos/{videoId}/complete`
+
+Purpose:
+- Verify uploaded object.
+- Check object existence.
+- Verify file size and expected content type.
+- Finalize upload.
+- Generate QR token.
+- Return viewing URL.
+
+POST `/videos/{videoId}/upload-failed`
+
+Purpose:
+- Record an upload failure.
+- Store the error category.
+- Allow later retry.
+
+GET `/videos/{videoId}/status`
+
+Purpose:
+- Reconcile upload state after connection interruptions.
+
+## 7.3 Home Feed Endpoints
+
+GET `/events/{eventId}/videos`
+
+Parameters:
+- cursor
+- limit
+
+Return:
+- Available videos for the event
+- Metadata
+- Thumbnail information
+- Expiration date
+
+Sort by newest first.
+
+Use cursor-based pagination.
+
+The server must never return videos belonging to a different event.
+
+## 7.4 QR Viewing Endpoints
+
+GET `/v/{token}`
+
+Purpose:
+- Resolve the unique access token.
+- Verify the video is AVAILABLE.
+- Verify it has not expired.
+- Render the mobile video-viewing page.
+
+GET `/api/v1/public/videos/{token}/playback`
+
+Purpose:
+- Validate the QR token.
+- Generate a short-lived presigned GET URL.
+- Return playback information.
+
+GET `/api/v1/public/videos/{token}/download`
+
+Purpose:
+- Validate the token.
+- Generate a short-lived download URL.
+- Use an appropriate Content-Disposition attachment response.
+
+The public viewing page must not expose R2 credentials or database IDs.
+
+## 7.5 Admin Endpoints
+
+GET `/admin/events/{eventId}/videos`
+
+GET `/admin/events/{eventId}/storage`
+
+DELETE `/admin/videos/{videoId}`
+
+POST `/admin/videos/{videoId}/rotate-token`
+
+POST `/admin/videos/{videoId}/retry-verification`
+
+GET `/admin/uploads`
+
+Admin operations must require administrator authentication.
+
+# 8. QR Code Security
+
+Use cryptographically secure random tokens.
+
+Recommended token:
+- At least 256 bits of random entropy.
+- URL-safe Base64 or hexadecimal representation.
+- Store only a secure hash of the token in MySQL.
+- Return the original token only when generated.
+- Do not use sequential video IDs in public URLs.
+
+Example viewing URL:
+
+`https://your-domain.com/v/UNIQUE_RANDOM_TOKEN`
+
+The QR link acts as a bearer credential.
+
+Anyone possessing the link can access the associated video while it remains available.
+
+No Gmail login or guest registration is required.
+
+The QR page must:
+- Display only the associated video.
+- Support mobile playback.
+- Provide a download button.
+- Display an expired-link message after expiration.
+- Never expose other event videos.
+- Avoid third-party advertising or unnecessary trackers.
+
+Use HTTPS everywhere.
+
+Apply request rate limiting to public token endpoints.
+
+Prevent token enumeration and use constant-time token hash comparison where applicable.
+
+# 9. Video Viewing Website
+
+Build a lightweight, mobile-responsive web experience.
+
+The video page should contain:
+
+- RetroTok branding
+- Video player
+- Play/pause controls
+- Fullscreen playback
+- Download button
+- Event name
+- Expiration notice
+- Expired/unavailable state
+
+Use native HTML5 video playback.
+
+The actual MP4 remains in private R2 storage.
+
+When a guest opens the page, the backend validates the token and creates a short-lived signed playback URL.
+
+Recommended playback URL expiration: approximately 15–60 minutes, configurable.
+
+A new signed URL should be issued when the guest reopens the QR page.
+
+The QR token remains valid for the 30-day retention period, not for the duration of the signed playback URL.
+
+# 10. Local Storage and Upload Recovery
+
+This is a critical requirement because the actual kiosk runs Android 6.0.1/API 23 and has limited storage.
+
+Rules:
+
+1. Never delete a recording before cloud verification.
+2. Never automatically delete a pending upload.
+3. Never delete an interrupted or recoverable recording.
+4. Maintain a persistent upload queue.
+5. Resume or restart incomplete uploads safely.
+6. Use file streaming rather than loading MP4 files into memory.
+7. Allow only one active upload at a time.
+8. Reconcile local upload state with backend state after application restart.
+9. Retain a local thumbnail after successful upload if storage permits.
+10. Delete the local MP4 only after cloud verification and successful database finalization.
+
+After successful upload, Home should use the cloud video URL for playback.
+
+Implement a small, size-limited playback cache. The cache must never delete pending uploads or unpublished recordings.
+
+Reuse the existing StorageHealth implementation:
+- Warn at the existing low-storage warning threshold.
+- Block new recordings at the existing critical threshold.
+- Show the admin the number and size of pending uploads.
+- Require administrator action when storage is insufficient.
+
+If local storage reaches the critical threshold:
+- Block new recording.
+- Do not silently discard any file.
+- Notify the administrator.
+- Provide upload retry and safe cleanup tools.
+
+# 11. Internet Failure Handling
+
+Recording and processing must continue without internet access.
+
+| Situation | Required behavior |
+|---|---|
+| Internet unavailable before recording | Allow recording |
+| Internet unavailable during processing | Preserve completed local video |
+| Internet unavailable during upload | Mark pending/retry |
+| Upload URL expired | Request a new URL |
+| Upload interrupted | Retry safely |
+| Backend unavailable | Keep local queue |
+| R2 unavailable | Keep local queue |
+| App restarted | Reconcile pending uploads |
+| Kiosk restarted | Recover valid local recordings |
+| Upload succeeds | Verify before local cleanup |
+
+Use exponential backoff with a maximum retry delay and avoid aggressive repeated network requests.
+
+A failed upload must never block browsing existing videos.
+
+# 12. Event Lifecycle Integration
+
+Reuse the existing Phase 7 EventLifecycleManager.
+
+Do not create a separate event lifecycle.
+
+Event states should support:
+- ACTIVE
+- PAUSED
+- CLOSING
+- ENDED
+
+Manual event ending:
+
+1. Admin chooses End Event.
+2. Block new recordings.
+3. Allow active recording/composition to finish safely.
+4. Preserve pending uploads.
+5. Continue uploading videos belonging to the event.
+6. Mark the event ENDED.
+7. Keep its online videos available until their individual expiration dates.
+
+An event ending must not cancel an already initiated upload or delete pending files.
+
+The backend must accept completion of an upload session that was validly initiated while the event was active, even if the event is subsequently ended.
+
+# 13. Thirty-Day Retention Policy
+
+Retention begins at successful upload completion.
+
+`expires_at = uploaded_at + 30 days`
+
+A daily scheduled backend job must:
+
+1. Find videos where expires_at has passed.
+2. Delete the MP4 object from R2.
+3. Delete the thumbnail object from R2.
+4. Mark the MySQL record EXPIRED or DELETED.
+5. Reconcile any partially completed deletion.
+6. Record errors for administrator review.
+
+Deletion must be idempotent.
+
+If object deletion succeeds but the database update fails, the next scheduled run must safely complete the database update.
+
+Consider an R2 lifecycle rule at approximately 32 days as a secondary safety mechanism, not as the primary database synchronization mechanism.
+
+Expired QR links must immediately become inaccessible through the API, even if the object has not yet been physically removed.
+
+# 14. Admin Panel Integration
+
+Add a Cloud Management section to the existing RetroTok Admin Panel.
+
+## Cloud Dashboard
+
+Display:
+- Cloud connection status
+- Backend connection status
+- R2 availability
+- Active event
+- Uploaded video count
+- Pending upload count
+- Failed upload count
+- Total cloud storage used
+- Expiring videos
+- Last successful synchronization
+
+## Upload Queue
+
+Features:
+- List pending uploads
+- Show upload progress
+- Show failed uploads
+- Retry failed uploads
+- Inspect error messages
+- View local file availability
+
+## Video Management
+
+Features:
+- View cloud videos
+- Preview video
+- View QR code
+- Rotate/revoke QR token
+- Delete cloud video
+- View expiration date
+
+## Storage Management
+
+Features:
+- Display local storage usage
+- Display cloud storage usage
+- Warn when event capacity approaches 300
+- Warn when cloud storage usage approaches its configured budget
+- Warn when local pending uploads threaten available storage
+
+## Event Management
+
+Features:
+- End event manually
+- Preserve pending uploads
+- View synchronization completion
+- Show remaining online retention period
+
+# 15. Android 6.0.1/API 23 Compatibility
+
+The physical target is Android 6.0.1/API 23.
+
+Do not assume Android 16/API 36 runtime behavior.
+
+Required changes:
+
+- Add INTERNET permission.
+- Add ACCESS_NETWORK_STATE permission.
+- Retain the existing camera and other necessary permissions.
+- Do not add RECORD_AUDIO unless the actual recording architecture requires microphone input.
+- Use API23-compatible HTTP libraries.
+- Use streaming upload requests.
+- Avoid unsupported Android APIs.
+- Verify TLS connectivity on the actual device.
+- Verify the selected WorkManager version supports minSdk 23.
+- If background scheduling is unsuitable, use a persistent upload service appropriate for the kiosk's operating mode.
+- Preserve the existing foreground recording and processing safeguards.
+- Keep upload operations away from the main thread.
+
+The application must not depend on:
+- Android 8+ notification channels
+- Android 10+ scoped storage behavior
+- Android 11+ package visibility
+- Android 12+ mutable PendingIntent flags
+- Android 13+ notification permission
+- Android 14+ foreground service type requirements
+
+Guard newer APIs with appropriate SDK checks.
+
+Do not change the project's minSdk below or above the actual hardware requirement without explicit justification.
+
+# 16. Backend Technology and Hosting Constraints
+
+The Hostinger plan is currently unknown.
+
+Default implementation recommendation:
+
+- PHP 8.x REST API
+- PDO for MySQL
+- AWS SDK for PHP for R2 S3-compatible operations and presigned URLs
+- Hostinger Cron Jobs for expiration and reconciliation
+- Static or lightweight PHP-based responsive viewing page
+
+Use the existing Node.js/Express backend only if the actual hosting subscription supports the required Node.js deployment and runtime.
+
+Do not assume Node.js is available on every Hostinger plan.
+
+Before implementation, verify:
+- Hosting plan name
+- PHP version and required extensions
+- Composer dependency deployment
+- MySQL availability
+- Cron availability
+- Domain/subdomain configuration
+- HTTPS certificate
+- Hostinger's rules for the intended application and traffic
+
+The backend must not process, transcode, or proxy large video files. Android handles video processing, and R2 handles media storage and delivery.
+
+# 17. Security and Privacy
+
+Security requirements:
+
+- R2 bucket must remain private.
+- R2 secret credentials must remain server-side.
+- Device API credentials must be revocable.
+- QR tokens must be unguessable.
+- Store token hashes rather than raw QR tokens.
+- Use short-lived presigned upload and playback URLs.
+- Validate all metadata.
+- Enforce file-size limits.
+- Verify MIME type and object existence.
+- Rate-limit public API access.
+- Protect administrator endpoints.
+- Never expose database credentials in Android.
+- Never expose cloud API secrets in the public website.
+- Use HTTPS.
+- Avoid storing guest names or personal details unless explicitly required.
+
+Display a privacy notice before recording that explains:
+- Videos are recorded on the kiosk.
+- Videos are uploaded to online storage when internet is available.
+- QR links allow anyone possessing them to view and download the associated video.
+- Videos are automatically deleted after 30 days.
+- Administrators can remove videos earlier.
+
+Record the guest's acknowledgment in the local session/event flow, consistent with the existing guest privacy notice.
+
+# 18. Error Handling and Recovery Matrix
+
+| Failure | Expected response |
+|---|---|
+| Invalid device token | Reject request and notify admin |
+| Event not active | Reject new upload initialization |
+| File too large | Reject before upload |
+| Unsupported MIME type | Reject upload |
+| R2 PUT failure | Preserve local file and retry |
+| Presigned URL expiration | Request a new URL |
+| Missing R2 object | Do not mark AVAILABLE |
+| Incorrect object size | Keep pending and report error |
+| QR token revoked | Show unavailable page |
+| QR link expired | Show expired page |
+| R2 deletion failure | Retry during next cleanup |
+| MySQL unavailable | Preserve local state |
+| Database migration failure | Do not delete existing data |
+| Local storage critical | Block new recording and alert admin |
+
+All operations that can be retried must be idempotent.
+
+Use a stable local video identifier and server-side idempotency keys to prevent duplicate cloud records.
+
+# 19. Testing Strategy
+
+## Automated Tests
+
+### Backend
+- Device pairing
+- Device authentication
+- Upload initialization
+- Presigned URL generation
+- Upload completion verification
+- Duplicate upload requests
+- Token generation and validation
+- QR access
+- Download access
+- Expiration logic
+- Cloud object deletion
+- Database reconciliation
+
+### Android
+- Room v3 → v4 migration
+- Persistent upload queue
+- Immediate Home display
+- Upload state transitions
+- Upload retry
+- URL expiration handling
+- Restart recovery
+- Duplicate prevention
+- Storage threshold behavior
+- Event ending with pending uploads
+- Playback cache cleanup
+
+### Integration
+- Android → Hostinger API
+- Android → R2 presigned PUT
+- Backend → R2 HEAD/DELETE
+- QR page → signed playback URL
+- Download from a mobile browser
+
+## Physical Hardware Tests
+
+Perform actual tests on the ZC-328-20190823 Android 6.0.1 kiosk.
+
+1. Record and process a 30-second video.
+2. Record and process a 60-second video.
+3. Upload a completed video.
+4. Disconnect internet during upload.
+5. Reconnect internet and verify retry.
+6. Restart the kiosk with pending uploads.
+7. Scan QR with a real smartphone.
+8. Play and download the video.
+9. Test expired and revoked QR tokens.
+10. Test low local storage.
+11. End an event while uploads are pending.
+12. Verify local MP4 cleanup only after cloud verification.
+13. Run a simulated 300-video event load test.
+14. Monitor memory, temperature, network stability, and playback.
+
+Do not claim physical compatibility until these tests have actually passed.
+
+# 20. Implementation Roadmap
+
+| Phase | Scope |
+|---|---|
+| Cloud Phase 0 | Requirements, architecture and hosting verification |
+| Cloud Phase 1 | Backend, MySQL, R2 and device authentication |
+| Cloud Phase 2 | Android upload queue and recovery |
+| Cloud Phase 3 | Immediate local/cloud Home feed integration |
+| Cloud Phase 4 | QR generation and mobile viewing/download website |
+| Cloud Phase 5 | Retention, deletion and admin cloud management |
+| Cloud Phase 6 | Integration, security and physical kiosk testing |
+
+# 21. Definition of Done
+
+The cloud implementation is complete only when:
+
+1. A guest can record a video without internet.
+2. The completed video appears immediately in Home.
+3. The video remains locally recoverable while upload is pending.
+4. The application uploads directly to R2.
+5. Backend verifies the uploaded object.
+6. The video becomes AVAILABLE.
+7. A unique QR code is displayed.
+8. A guest can scan the QR using a smartphone.
+9. The guest can watch and download the video.
+10. The Home feed does not display duplicate records.
+11. Uploads recover after network interruption or application restart.
+12. Local MP4 files are deleted only after verified cloud storage.
+13. Event ending preserves pending uploads.
+14. Videos expire after 30 days.
+15. Admin can monitor, retry, and delete cloud videos.
+16. The entire system works on the actual Android 6.0.1/API 23 kiosk.
+
+# 22. Explicit Out-of-Scope Items
+
+Do not implement:
+
+- TikTok content importing
+- Third-party social media integrations
+- Public social media sharing
+- Guest accounts or Gmail registration
+- Cloud-based video editing
+- Cloud video transcoding
+- Live streaming
+- Public browsing of all event videos
+- AI video generation
+- Permanent video archiving
+- Automatic deletion of unpublished recordings
+
+# 23. Implementation Principles
+
+1. Preserve all working RetroTok Phases 1–8.
+2. Extend existing repositories, entities, services, and state machines.
+3. Do not replace the existing recording engine.
+4. Do not introduce unnecessary dependencies.
+5. Keep all cloud operations asynchronous.
+6. Never delete the only recoverable copy of a video.
+7. Use Room as the local source of truth for pending work.
+8. Use MySQL as the cloud source of truth for uploaded content.
+9. Use R2 for actual video files.
+10. Use capability-based Android API23-compatible implementations.
+11. Keep all cloud credentials out of the Android APK.
+12. Clearly separate software tests from physical hardware verification.
+
+**Final Architecture Decision:**
+
+RetroTok will use a local-first Android kiosk, Hostinger-hosted API and MySQL, Cloudflare R2 private object storage, and token-protected QR video pages.
+
+The expected workload is 200 videos per event, with a technical capacity target of 300 videos and 30-day online retention.
+
+**Phase 0 status: Architecture and requirements finalized. Ready for hosting verification and implementation planning.**

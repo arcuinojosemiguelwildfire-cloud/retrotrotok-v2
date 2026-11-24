@@ -1,0 +1,24 @@
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Preserve Authorization header on Apache / Hostinger PHP-FPM / FastCGI
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Block hidden dotfiles (except well-known ACME challenges)
+    RewriteCond %{REQUEST_URI} !(^|/)\.well-known/
+    RewriteRule (^|/)\. - [F,L]
+
+    # Route all non-file requests through index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+</IfModule>
